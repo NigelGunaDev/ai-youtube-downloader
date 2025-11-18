@@ -6,6 +6,15 @@ import yt_dlp
 import os
 from pathlib import Path
 import json
+import re
+import logging
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="YouTube Downloader API")
 
@@ -33,6 +42,32 @@ class DownloadRequest(BaseModel):
     download_type: str  # 'video' or 'audio'
 
 
+def validate_youtube_url(url: str) -> bool:
+    """Validate that URL is a legitimate YouTube URL"""
+    youtube_patterns = [
+        r'(https?://)?(www\.)?youtube\.com/watch\?v=[\w-]+',
+        r'(https?://)?(www\.)?youtu\.be/[\w-]+',
+        r'(https?://)?(www\.)?youtube\.com/embed/[\w-]+',
+    ]
+    return any(re.match(pattern, url) for pattern in youtube_patterns)
+
+
+def progress_hook(d):
+    """Progress hook for download tracking"""
+    if d['status'] == 'downloading':
+        try:
+            percent = d.get('_percent_str', 'N/A')
+            speed = d.get('_speed_str', 'N/A')
+            eta = d.get('_eta_str', 'N/A')
+            logger.info(f"Downloading: {percent} at {speed} - ETA: {eta}")
+        except:
+            pass
+    elif d['status'] == 'finished':
+        logger.info(f"Download finished: {d.get('filename', 'unknown')}")
+    elif d['status'] == 'error':
+        logger.error(f"Download error occurred")
+
+
 @app.get("/")
 def read_root():
     return {"message": "YouTube Downloader API is running"}
@@ -41,6 +76,13 @@ def read_root():
 @app.post("/api/video-info")
 async def get_video_info(request: VideoInfoRequest):
     """Fetch video information including available formats"""
+    # Validate URL
+    if not validate_youtube_url(request.url):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid YouTube URL. Please provide a valid YouTube link (youtube.com or youtu.be)"
+        )
+
     try:
         ydl_opts = {
             'quiet': True,
@@ -98,18 +140,43 @@ async def get_video_info(request: VideoInfoRequest):
                 'audio_formats': audio_formats,
             }
 
+    except yt_dlp.utils.DownloadError as e:
+        logger.error(f"Download error for {request.url}: {e}")
+        raise HTTPException(
+            status_code=400,
+            detail="Failed to fetch video info. The video may be unavailable, private, or region-locked."
+        )
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        logger.error(f"Unexpected error: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="An unexpected error occurred. Please check the URL and try again."
+        )
 
 
 @app.post("/api/download")
 async def download_video(request: DownloadRequest):
     """Download video or audio in specified format"""
+    # Validate URL
+    if not validate_youtube_url(request.url):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid YouTube URL. Please provide a valid YouTube link (youtube.com or youtu.be)"
+        )
+
+    # Validate format_id
+    if not re.match(r'^[a-zA-Z0-9+_-]+$', request.format_id):
+        raise HTTPException(status_code=400, detail="Invalid format ID")
+
     try:
+        logger.info(f"Starting download: {request.url} - Format: {request.format_id} - Type: {request.download_type}")
+
         # Set up download options
         ydl_opts = {
             'format': request.format_id,
             'outtmpl': str(DOWNLOAD_DIR / '%(title)s.%(ext)s'),
+            'restrictfilenames': True,  # Security: Sanitize filenames
+            'progress_hooks': [progress_hook],  # Track download progress
             'quiet': False,
             'no_warnings': False,
         }
@@ -120,6 +187,7 @@ async def download_video(request: DownloadRequest):
                 'postprocessors': [{
                     'key': 'FFmpegExtractAudio',
                     'preferredcodec': 'mp3',
+                    'preferredquality': '192',
                 }],
             })
 
@@ -132,15 +200,38 @@ async def download_video(request: DownloadRequest):
             else:
                 filename = ydl.prepare_filename(info)
 
+            logger.info(f"Download completed: {os.path.basename(filename)}")
+
             return {
                 'success': True,
                 'filename': os.path.basename(filename),
-                'path': filename,
                 'message': 'Download completed successfully'
             }
 
+    except yt_dlp.utils.DownloadError as e:
+        logger.error(f"Download error for {request.url}: {e}")
+        error_msg = str(e).lower()
+
+        # Provide specific error messages based on error type
+        if 'private' in error_msg or 'unavailable' in error_msg:
+            detail = "Video is unavailable, private, or has been removed."
+        elif 'copyright' in error_msg:
+            detail = "Video cannot be downloaded due to copyright restrictions."
+        elif 'geo' in error_msg or 'region' in error_msg:
+            detail = "Video is not available in your region."
+        elif 'format' in error_msg:
+            detail = "Selected format is not available. Please try a different quality."
+        else:
+            detail = f"Download failed: {str(e)}"
+
+        raise HTTPException(status_code=400, detail=detail)
+
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        logger.exception(f"Unexpected error during download: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="An unexpected error occurred during download. Please try again."
+        )
 
 
 @app.get("/api/downloads")

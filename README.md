@@ -11,6 +11,10 @@ A modern, user-friendly YouTube downloader with a web interface. Download videos
 - Video preview with thumbnail, title, uploader, and duration
 - Real-time format information including file size estimates
 - Downloads saved to local filesystem
+- **Real-time download progress** - See download progress in terminal logs
+- **Smart error messages** - Specific error messages for different failure scenarios
+- **Security hardened** - Filename sanitization and URL validation
+- **Auto-updated** - Uses latest yt-dlp version for YouTube compatibility
 
 ## Tech Stack
 
@@ -93,6 +97,11 @@ python main.py
 ```
 
 The backend API will be available at `http://localhost:8000`
+
+**Note:** Download progress will be displayed in this terminal window, showing:
+- Download percentage
+- Download speed
+- Estimated time remaining
 
 ### Terminal 2 - Frontend
 
@@ -213,6 +222,7 @@ ai-youtube-downloader/
 - Ensure Python 3.8+ is installed: `python --version`
 - Activate virtual environment
 - Install dependencies: `pip install -r requirements.txt`
+- If you see import errors, try: `pip install --upgrade -r requirements.txt`
 
 ### Frontend won't start
 - Ensure Node.js 16+ is installed: `node --version`
@@ -221,12 +231,23 @@ ai-youtube-downloader/
 
 ### Downloads fail
 - Ensure FFmpeg is installed: `ffmpeg -version`
-- Check YouTube URL is valid
-- Some videos may be restricted or unavailable
+- Check YouTube URL is valid (must be youtube.com or youtu.be)
+- The app will show specific error messages:
+  - "Video is unavailable, private, or has been removed" - Video doesn't exist or is private
+  - "Video cannot be downloaded due to copyright restrictions" - Copyright protected
+  - "Video is not available in your region" - Geo-blocked content
+  - "Selected format is not available" - Try a different quality
+- Some videos may be age-restricted or require sign-in
 
 ### CORS errors
 - Ensure backend is running on port 8000
 - Check frontend proxy configuration in `vite.config.ts`
+
+### yt-dlp errors
+- YouTube frequently changes their API, update yt-dlp:
+  ```bash
+  pip install --upgrade yt-dlp
+  ```
 
 ## Development
 
